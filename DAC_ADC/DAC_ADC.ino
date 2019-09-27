@@ -3,6 +3,8 @@
 //Carlos Kometter
 #include "SPI.h" // necessary library for SPI communication
 #include <vector>
+#include <ctime>
+using namespace std;
 int adc=52; //The SPI pin for the ADC
 int spi = 4; //The SPI pin for the DAC
 int ldac=6; //Load DAC pin for DAC. Make it LOW if not in use. 
@@ -83,10 +85,10 @@ void setup()
   SPI.setDataMode(adc,SPI_MODE3); //This should be 3 for the AD7734
   SPI.setDataMode(spi,SPI_MODE1); //This should be 1 for the AD5764
 
-  // Disables DAC_SDO to avoid interference with ADC
-//  SPI.transfer(dac,1,SPI_CONTINUE);
-//  SPI.transfer(dac,0,SPI_CONTINUE);
-//  SPI.transfer(dac,1);
+  //  Disables DAC_SDO to avoid interference with ADC
+  //  SPI.transfer(dac,1,SPI_CONTINUE);
+  //  SPI.transfer(dac,0,SPI_CONTINUE);
+  //  SPI.transfer(dac,1);
 }
 
 void blinker(int s){digitalWrite(data,HIGH);delay(s);digitalWrite(data,LOW);delay(s);}
@@ -165,10 +167,15 @@ void writeADCConversionTime(std::vector<String> DB)
   int convtime = ((int)(((cr&127)*128+249)/6.144)+0.5);
   Serial.println(convtime);
 }
-
+//int decimal = map2(avg, -10.0, 10.0, 0, 65536);
 float map2(float x, long in_min, long in_max, float out_min, float out_max) //float
 {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+int map2int(float x, long in_min, long in_max, float out_min, float out_max) //float
+{
+  return round((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min);
 }
 
 int twoByteToInt(byte DB1,byte DB2) // This gives a 16 bit integer (between +/- 2^16)
@@ -325,8 +332,36 @@ float writeDAC(int dacChannel, float voltage)
   }
 }
 
+/* Simplified version of readingRampAvg w/o avging */
+void readingRamp (int adcchan, byte * o1, byte * o2, int count){
+  int statusbyte = 0;
+  
+  // Check for valid adc channel
+  if (adcchan > 3 || adcchan < 0){
+    return; // FAILURE
+  }
+  // Clear serial port
+  Serial.flush();
+  // Handle connections with DAC/ADC
+  SPI.transfer(adc,0x38+adcchan);     // Indicates comm register to access mode register with channel
+  SPI.transfer(adc,0x48);             // Indicates mode register to start single convertion in dump mode
+  waitDRDY();                         // Waits until conversion finishes
+  SPI.transfer(adc,0x48+adcchan);     // Indcates comm register to read data channel data register
+  // Check for success
+  statusbyte = SPI.transfer(adc,0);   // Reads Channel 'ch' 
+  if (statusbyte&1){
+    *o1 = 128; *o2 = 0;
+    return; // FAILURE
+  }
+  // Read bytes
+  *o1 = SPI.transfer(adc,0);         
+  *o2 = SPI.transfer(adc,0);          
+}
+
+
 void readingRampAvg(int adcchan, byte b1, byte b2, byte * o1, byte * o2,int count,int nReadings)
-{
+{ 
+  //time_t start_time = time(NULL); 
   Serial.flush();
   int statusbyte=0;
   int ovr;
@@ -343,8 +378,20 @@ void readingRampAvg(int adcchan, byte b1, byte b2, byte * o1, byte * o2,int coun
       SPI.transfer(adc,0x48);           // Indicates mode register to start single convertion in dump mode
       if (count>0 && toSend)
       {
-        Serial.write(b1);                 // Sends previous reading while it is waiting for new reading
+//        Serial.print(b1, HEX);                 // Sends previous reading while it is waiting for new reading
+//        Serial.print(b2, HEX);
+//        Serial.print(":");
+//        Serial.print(twoByteToInt(b1,b2));
+//        Serial.print("-");
+//        if (b1 == 0x0D)
+//          b1 = 0x0C;
+//        if (b2 == 0x0D)
+//          b2 = 0x0E;
+        Serial.write(b1);
         Serial.write(b2);
+        //Serial.write(":int:");
+       // Serial.print(map2(twoByteToInt(b1,b2), 0, 65536, -10.0, 10.0));
+       // Serial.write(",");
         toSend = false;
       }
       waitDRDY();                       // Waits until convertion finishes
@@ -353,7 +400,7 @@ void readingRampAvg(int adcchan, byte b1, byte b2, byte * o1, byte * o2,int coun
       db1=SPI.transfer(adc,0);           // Reads first byte
       db2=SPI.transfer(adc,0);           // Reads second byte
       ovr=statusbyte&1;
-      if (ovr){break;}
+      if (ovr) break;
       int decimal = twoByteToInt(db1,db2);
       float voltage = map2(decimal, 0, 65536, -10.0, 10.0);
       sum += voltage;
@@ -366,37 +413,31 @@ void readingRampAvg(int adcchan, byte b1, byte b2, byte * o1, byte * o2,int coun
     else
     {
       avg = sum/nReadings;
-      int decimal = map2(avg, -10.0, 10.0, 0, 65536);
+      int decimal = map2int(avg, -10.0, 10.0, 0, 65536);
       intToTwoByte(decimal, &db1, &db2);
       *o1=db1;
       *o2=db2;
     }
   }
+  //time_t end_time = time(NULL);
+  //Serial.print(end_time - start_time);
 }
 
+//rampRead(channelsADC[i]-'0', b1, b2, &b1, &b2, count,DB[NchannelsDAC*2+5].toInt());
 void rampRead(byte DB,byte b1, byte b2, byte * o1, byte * o2, int count,int nReadings )
 {
-  int adcChannel=DB;
-  switch (adcChannel)
-  {
-    case 0:
-    readingRampAvg(0, b1 , b2, o1, o2,count,nReadings);
-    break;
-    
-    case 1:
-    readingRampAvg(1, b1 , b2, o1, o2,count,nReadings);
-    break;
-    
-    case 2:
-    readingRampAvg(2, b1 , b2, o1, o2,count,nReadings);
-    break;
-    
-    case 3:
-    readingRampAvg(3, b1 , b2, o1, o2,count,nReadings);
-    break;
+  int adcChannel=DB;\
   
-    default:  
-    break;
+  // Check for valid ADC channel
+  if (adcChannel < 0 || adcChannel > 3){
+    return; // FAILURE
+  }
+  
+  // If nReadings == 1, call simpler readingRamp function
+  if (nReadings == 1){
+    readingRamp(adcchannel, o1, o2, count);
+  } else {
+    readingRampAvg(adcChannel, b1 , b2, o1, o2,count,nReadings);
   }
 }
 
@@ -441,6 +482,75 @@ float writeDAC_buffer(int dacChannel, float voltage)
   }
 }
 
+// Much like bufferRamp, except Serial.prints acsii
+void bufferRampAscii(std::vector<String> DB){
+  String channelsDAC = DB[1];
+  int NchannelsDAC = channelsDAC.length();
+  String channelsADC = DB[2];
+  int NchannelsADC = channelsADC.length();
+  std::vector<float> vi;
+  std::vector<float> vf;
+  float v_min = -1*DAC_FULL_SCALE;
+  float v_max = DAC_FULL_SCALE;
+  for(int i = 3; i < NchannelsDAC+3; i++)
+  {
+    vi.push_back(DB[i].toFloat());
+    vf.push_back(DB[i+NchannelsDAC].toFloat());
+  }
+  int nSteps=(DB[NchannelsDAC*2+3].toInt());
+  byte b1;
+  byte b2;
+  int count =0;
+  int decimal;
+  for (int j=0; j<nSteps;j++)
+  {
+    digitalWrite(data,HIGH);
+    for(int i = 0; i < NchannelsDAC; i++)
+    {
+      float v;
+      v = vi[i]+(vf[i]-vi[i])*j/(nSteps-1);
+      if(v<v_min)
+      {
+        v=v_min;
+      }
+      else if(v>v_max)
+      {
+        v=v_max;
+      }
+      writeDAC_buffer(channelsDAC[i]-'0',v);
+      decimal = map2int(v, -10.0, 10.0, 0, 65536);
+
+    }
+    digitalWrite(ldac,LOW);
+    digitalWrite(ldac,HIGH);
+    if (delayUnit)
+    {
+      delay(DB[NchannelsDAC*2+4].toInt());
+    }
+    else
+    {
+      delayMicroseconds(DB[NchannelsDAC*2+4].toInt());
+    }
+    for(int i = 0; i < NchannelsADC; i++)
+    {
+      rampRead(channelsADC[i]-'0', b1, b2, &b1, &b2, count,DB[NchannelsDAC*2+5].toInt());     
+      Serial.print(b1, HEX);
+      Serial.print(b2, HEX);
+      count+=1;
+    }
+    if(Serial.available())
+    {
+      std::vector<String> comm;
+      comm = query_serial();
+      if(comm[0] == "STOP")
+      {
+        break;
+      }
+    }
+  }
+  digitalWrite(data,LOW);
+}
+
 void bufferRamp(std::vector<String> DB)
 {
   String channelsDAC = DB[1];
@@ -460,6 +570,7 @@ void bufferRamp(std::vector<String> DB)
   byte b1;
   byte b2;
   int count =0;
+  int decimal;
   for (int j=0; j<nSteps;j++)
   {
     digitalWrite(data,HIGH);
@@ -476,6 +587,8 @@ void bufferRamp(std::vector<String> DB)
         v=v_max;
       }
       writeDAC_buffer(channelsDAC[i]-'0',v);
+      decimal = map2int(v, -10.0, 10.0, 0, 65536);
+
     }
     digitalWrite(ldac,LOW);
     digitalWrite(ldac,HIGH);
@@ -489,7 +602,14 @@ void bufferRamp(std::vector<String> DB)
     }
     for(int i = 0; i < NchannelsADC; i++)
     {
-      rampRead(channelsADC[i]-'0', b1, b2, &b1, &b2, count,DB[NchannelsDAC*2+5].toInt());
+     // rampRead(channelsADC[i]-'0', b1, b2, &b1, &b2, count,DB[NchannelsDAC*2+5].toInt());
+      intToTwoByte(decimal, &b1, &b2);
+     
+      Serial.write(b1);
+      Serial.write(b2);
+//      Serial.print(":");
+//      Serial.print(decimal);
+//      Serial.println("");
       count+=1;
     }
     if(Serial.available())
@@ -502,8 +622,8 @@ void bufferRamp(std::vector<String> DB)
       }
     }
   }
-  Serial.write(b1);
-  Serial.write(b2);
+//  Serial.write(b1);
+//  Serial.write(b2);
   digitalWrite(data,LOW);
 }
 

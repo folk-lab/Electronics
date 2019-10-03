@@ -1,3 +1,5 @@
+#include <Vector.h>
+
 //Ardunio *DUE*code for controlling EVAL-AD7734 ADC and EVAL-AD5764 DAC
 //Andrea Young
 //Carlos Kometter
@@ -343,8 +345,10 @@ void readingRampAvg(int adcchan, byte b1, byte b2, byte * o1, byte * o2,int coun
       SPI.transfer(adc,0x48);           // Indicates mode register to start single convertion in dump mode
       if (count>0 && toSend)
       {
-        Serial.write(b1);                 // Sends previous reading while it is waiting for new reading
-        Serial.write(b2);
+//        Serial.write(b1);                 // Sends previous reading while it is waiting for new reading
+//        Serial.write(b2);
+        Serial.print(twoByteToInt(b1,b2));
+        Serial.print(",");
         toSend = false;
       }
       waitDRDY();                       // Waits until convertion finishes
@@ -502,8 +506,10 @@ void bufferRamp(std::vector<String> DB)
       }
     }
   }
-  Serial.write(b1);
-  Serial.write(b2);
+//  Serial.write(b1);
+//  Serial.write(b2);
+        Serial.print(twoByteToInt(b1,b2));
+        Serial.print(",");
   digitalWrite(data,LOW);
 }
 
@@ -793,7 +799,7 @@ void router(std::vector<String> DB)
     
     case 7: // Autoramp
     bufferRamp(DB);
-    Serial.println("BUFFER_RAMP_FINISHED");
+    Serial.println("X");
     break;
 
     case 8:
